@@ -1,0 +1,202 @@
+import math
+import random
+
+import numpy as np
+import pandas as pd
+
+from src.rrt.tree import Tree
+from src.utilities.geometry import steer, steer_C ,dist_between_points
+import time
+from src.rrt.heuristics import segment_cost, path_cost
+import src.utilities.geometry as geo
+class RRTBase(object):
+    def __init__(self, X, Q, x_init, x_goal, max_samples, r, prc=0.01):
+
+        self.X = X
+        self.samples_taken = 0
+        self.max_samples = max_samples
+        self.Q = Q
+        self.r = r
+        self.prc = prc
+        self.x_init = x_init
+        self.x_goal = x_goal
+        self.trees = []  
+        self.add_tree()  
+        self.apt=None
+        self.steer=5
+        self.restore={'cursample':[],
+                      'pathlength':[],
+                      'cursmooth':[],
+                      'curtime': []
+                      }
+        self.flag=0.5
+        self.maxtime=150
+        self.diff=0
+    def record(self,samples_taken,path,name,time):
+        cost = 0
+        for m in range(len(path) - 1):
+            cost = cost + geo.dist_between_points(path[m], path[m + 1])
+        arc = 0
+        p = np.array(path)
+        for k in range(len(p) - 2):
+            tep1 = np.linalg.norm(p[k + 1] - p[k]) ** 2 + np.linalg.norm(p[k + 2] - p[k + 1]) ** 2 - np.linalg.norm(
+                p[k + 2] - p[k]) ** 2
+            tep2 = 2 * float(np.linalg.norm(p[k + 1] - p[k])) * float((np.linalg.norm(p[k + 2] - p[k + 1])))
+            cos = tep1 / tep2
+            # arc = arc + 180 - math.degrees(math.acos(cos))
+            aec=0
+        self.restore['pathlength'].append(cost)
+        self.restore['cursample'].append(samples_taken)
+        self.restore['cursmooth'].append(math.radians(arc))
+        self.restore['curtime'].append(time)
+
+
+    def add_tree(self):
+
+        self.trees.append(Tree(self.X))
+
+    def add_vertex(self, tree, v):#点集
+
+        self.trees[tree].V.insert(0, v + v, v)
+        self.trees[tree].V_count += 1  
+        # self.samples_taken += 1 
+
+    def add_edge(self, tree, child, parent):
+
+
+        self.trees[tree].E[child] = parent
+
+
+    def nearby(self, tree, x,n):
+
+
+        return self.trees[tree].V.nearest(x, num_results=n, objects="raw")
+
+
+    def get_nearest(self, tree, x):
+
+
+        return next(self.nearby(tree, x,1))
+
+    def new_and_near(self, tree,q):
+
+
+        x_rand = self.X.sample_free()  
+
+        x_nearest = self.get_nearest(tree, x_rand) 
+        x_new = self.bound_point(steer(x_nearest, x_rand, q))
+
+
+
+        if not self.trees[0].V.count(x_new) == 0 or not self.X.obstacle_free(x_new) or not self.X.collision_free(x_nearest,x_new,self.r):
+            return None, None
+
+        return x_new, x_nearest
+    def test(self,xnearest,xrand):
+        a=[i for i in xnearest]
+        if len(a)<2:
+            return a[0]
+        s=np.array(xrand)-np.array(a[0])
+        b=np.array(a[1])-np.array(a[0])
+        if s.dot(b)/(np.linalg.norm(s) * np.linalg.norm(b))>0.5:
+            print('niamde',a,xrand)
+            return None
+        print('bleg',a[0])
+        return a[0]
+    def upnew_and_near(self, tree,q):
+
+        if self.apt==None or self.flag==1:
+            x_rand = self.X.sample_free()  # 采样
+        else:
+            x_rand=self.apt
+
+
+        x_new = self.bound_point(steer(x_nearest, x_rand, q))
+
+
+        if not self.trees[0].V.count(x_new) == 0 or not self.X.obstacle_free(x_new) or not self.X.collision_free(x_nearest,x_new,self.r):
+            return None, None
+
+        self.samples_taken += 1
+
+        return x_new, x_nearest
+    
+   
+    
+    
+
+
+    
+    
+   
+    def connect_to_point(self, tree, x_a, x_b):
+
+
+        if self.trees[tree].V.count(x_b) == 0 and self.X.collision_free(x_a, x_b, self.r):
+            self.add_vertex(tree, x_b)
+            self.add_edge(tree, x_b, x_a)
+
+            return True
+        return False
+
+    def can_connect_to_goal(self, tree):
+
+        x_nearest = self.get_nearest(tree, self.x_goal)
+
+        if self.x_goal in self.trees[tree].E:#and x_nearest in self.trees[tree].E[self.x_goal]:
+
+            return True
+        if dist_between_points(x_nearest , self.x_goal)<self.steer and  self.X.collision_free(x_nearest, self.x_goal, self.r):  # check if obstacle-free
+            return True
+        return False
+
+    def get_path(self):
+
+
+        if  1 and self.can_connect_to_goal(0):
+            print("Can connect to goal")
+            self.connect_to_goal(0)
+            return self.reconstruct_path(0, self.x_init, self.x_goal)
+        print("Could not connect to goal")
+        return None
+
+    def connect_to_goal(self, tree):
+
+        x_nearest = self.get_nearest(tree, self.x_goal)
+        self.trees[tree].E[self.x_goal] = x_nearest
+
+    def reconstruct_path(self, tree, x_init, x_goal):
+
+        path = [x_goal]
+        current = x_goal
+        if x_init == x_goal:
+            return path
+        while not self.trees[tree].E[current] == x_init:
+            path.append(self.trees[tree].E[current])
+            current = self.trees[tree].E[current]
+        path.reverse()
+        return path
+
+    def check_solution(self):
+
+        if self.prc and random.random() < self.prc and self.samples_taken <= self.max_samples:
+            print("Checking if can connect1 to goal at", str(self.samples_taken), "samples")
+            path = self.get_path()#返回此时能否到终点
+            if path is not None:
+
+
+                return False,path
+
+        if self.samples_taken >= self.max_samples:
+            return True, self.get_path()
+        return False, None
+
+    def bound_point(self, point):
+
+        point = np.maximum(point, self.X.dimension_lengths[:, 0])
+        point = np.minimum(point, self.X.dimension_lengths[:, 1])
+        return tuple(point)
+  
+
+
+
